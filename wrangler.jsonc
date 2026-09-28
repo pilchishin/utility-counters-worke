@@ -5,12 +5,25 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "utility-counters-worker",
-	"main": "src/index.js",
+	"main": "src/index.ts",
 	"compatibility_date": "2026-09-23",
 	"observability": {
 		"enabled": true
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "et14a",
+			"database_id": "39014a90-8b8b-4e1a-9a2c-07eda2556848"
+		}
+	],
+	"r2_buckets": [
+		{
+			"bucket_name": "et14a",
+			"binding": "et14a_bucket"
+		}
+	]
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
