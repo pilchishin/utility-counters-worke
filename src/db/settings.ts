@@ -25,3 +25,25 @@ export async function getSettingNumber(
   const parsed = Number(row.value);
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
+
+/**
+ * Читает текстовую настройку (например, название часового пояса).
+ * Возвращает defaultValue, если ключ не найден или значение пустое.
+ */
+export async function getSettingText(
+  db: D1Database,
+  key: string,
+  defaultValue: string
+): Promise<string> {
+  const row = await db
+    .prepare("SELECT value FROM system_settings WHERE key = ?")
+    .bind(key)
+    .first<{ value: string }>();
+
+  if (!row) {
+    return defaultValue;
+  }
+
+  const trimmed = row.value.trim();
+  return trimmed.length > 0 ? trimmed : defaultValue;
+}

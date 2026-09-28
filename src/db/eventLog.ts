@@ -56,3 +56,24 @@ export async function countRecentEvents(
 
   return row?.count ?? 0;
 }
+
+/**
+ * Проверяет, было ли когда-либо записано событие с заданными
+ * сущностью и действием. Используется планировщиком, чтобы не
+ * отправлять одно и то же уведомление повторно.
+ */
+export async function hasEvent(
+  db: D1Database,
+  entityType: string,
+  entityId: number,
+  action: string
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      "SELECT 1 AS found FROM event_log WHERE entity_type = ? AND entity_id = ? AND action = ? LIMIT 1"
+    )
+    .bind(entityType, entityId, action)
+    .first<{ found: number }>();
+
+  return row !== null;
+}

@@ -1,4 +1,6 @@
-import { getSettingNumber } from "./settings";
+import { getSettingNumber, getSettingText } from "./settings";
+import { logEvent } from "./eventLog";
+import { getLocalDateTime } from "../utils/localTime";
 
 /**
  * Работа с расчётными периодами (таблица billing_periods).
@@ -12,6 +14,9 @@ export interface BillingPeriodRow {
   ends_at: string;
   status: string;
 }
+
+// Часовой пояс по умолчанию, если настройка timezone отсутствует.
+const DEFAULT_TIME_ZONE = "Europe/Kyiv";
 
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
@@ -33,23 +38,25 @@ async function findPeriod(
 }
 
 /**
- * Возвращает расчётный период текущего месяца. Если его ещё нет —
- * создаёт со статусом 'collecting', используя настройки
- * billing_day_start и billing_day_end из system_settings.
+ * Возвращает расчётный период текущего МЕСТНОГО месяца (часовой пояс
+ * берётся из system_settings.timezone). Если периода ещё нет — создаёт
+ * его со статусом 'collecting', используя настройки billing_day_start
+ * и billing_day_end.
  *
- * Пока автоматического планировщика (Cron) нет, период создаётся
- * при первом обращении в новом месяце. Позже эту работу возьмёт на
- * себя Cron, а эта функция останется как запасной вариант.
+ * Обычно период создаёт Cron в начале месяца; эта функция остаётся
+ * запасным вариантом, если кто-то из жильцов обратился к боту раньше
+ * планировщика.
  *
- * Внимание: текущий месяц определяется по UTC. Поправка на часовой
- * пояс будет добавлена вместе с Cron-задачами.
+ * Параметр now нужен для тестов планировщика (имитация другой даты).
  */
 export async function getOrCreateCurrentPeriod(
   db: D1Database,
   now: Date = new Date()
 ): Promise<BillingPeriodRow> {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth() + 1;
+  const timeZone = await getSettingText(db, "timezone", DEFAULT_TIME_ZONE);
+  const local = getLocalDateTime(now, timeZone);
+  const year = local.year;
+  const month = local.month;
 
   const existing = await findPeriod(db, year, month);
   if (existing) {
@@ -62,15 +69,21 @@ export async function getOrCreateCurrentPeriod(
   // Последний день месяца (Date.UTC с "нулевым днём" следующего месяца).
   const lastDayOfMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
-  const startDay = Math.min(Math.max(Math.trunc(startDaySetting), 1), lastDayOfMonth);
-  const endDay = Math.min(Math.max(Math.trunc(endDaySetting), startDay), lastDayOfMonth);
+  const startDay = Math.min(
+    Math.max(Math.trunc(startDaySetting), 1),
+    lastDayOfMonth
+  );
+  const endDay = Math.min(
+    Math.max(Math.trunc(endDaySetting), startDay),
+    lastDayOfMonth
+  );
 
   const startsAt = `${year}-${pad2(month)}-${pad2(startDay)}`;
   const endsAt = `${year}-${pad2(month)}-${pad2(endDay)}`;
 
   // INSERT OR IGNORE — защита от гонки: если два запроса одновременно
   // создают период, уникальный индекс (year, month) пропустит только один.
-  await db
+  const insertResult = await db
     .prepare(
       "INSERT OR IGNORE INTO billing_periods (year, month, starts_at, ends_at, status) VALUES (?, ?, ?, ?, 'collecting')"
     )
@@ -81,5 +94,54 @@ export async function getOrCreateCurrentPeriod(
   if (!created) {
     throw new Error("Не удалось создать расчётный период");
   }
+
+  // В журнал пишем только если период создан именно этим вызовом.
+  if (insertResult.meta.changes > 0) {
+    try {
+      await logEvent(db, {
+        entityType: "billing_period",
+        entityId: created.id,
+        action: "period_opened",
+        payload: { year, month, starts_at: startsAt, ends_at: endsAt },
+      });
+    } catch (error) {
+      // Сбой журнала не должен мешать работе с периодом.
+      console.error("Не удалось записать period_opened в журнал:", error);
+    }
+  }
+
   return created;
+}
+
+/**
+ * Все периоды со статусом 'collecting' (от старых к новым).
+ */
+export async function listCollectingPeriods(
+  db: D1Database
+): Promise<BillingPeriodRow[]> {
+  const result = await db
+    .prepare(
+      "SELECT id, year, month, starts_at, ends_at, status FROM billing_periods WHERE status = 'collecting' ORDER BY year, month"
+    )
+    .all<BillingPeriodRow>();
+
+  return result.results;
+}
+
+/**
+ * Закрывает период. Возвращает true, если период был закрыт именно
+ * этим вызовом (false — он уже был закрыт).
+ */
+export async function closePeriod(
+  db: D1Database,
+  periodId: number
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      "UPDATE billing_periods SET status = 'closed', closed_at = datetime('now') WHERE id = ? AND status = 'collecting'"
+    )
+    .bind(periodId)
+    .run();
+
+  return result.meta.changes > 0;
 }
