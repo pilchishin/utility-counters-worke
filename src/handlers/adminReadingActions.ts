@@ -15,6 +15,21 @@ import { parseReadingInput } from "../services/numberParser";
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
 
+// Допустимые пути возврата после действия — только свои страницы панели.
+// Всё остальное (в т.ч. попытка подставить внешний адрес) откатывается
+// на безопасный путь по умолчанию.
+const REPORTS_RETURN_PATTERN = /^\/admin\/reports\?period=\d+$/;
+
+function sanitizeReturnTo(raw: unknown): string {
+  if (typeof raw !== "string") {
+    return "/admin";
+  }
+  if (raw === "/admin" || REPORTS_RETURN_PATTERN.test(raw)) {
+    return raw;
+  }
+  return "/admin";
+}
+
 function roundTo3(value: number): number {
   return Number(value.toFixed(3));
 }
@@ -36,9 +51,10 @@ export async function handleAdminConfirmReading(
 
   const form = await request.formData();
   const readingId = Number(form.get("reading_id"));
+  const backPath = sanitizeReturnTo(form.get("return_to"));
 
   if (!Number.isInteger(readingId) || readingId <= 0) {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Некорректный номер показания.",
     });
@@ -46,7 +62,7 @@ export async function handleAdminConfirmReading(
 
   const reading = await findReadingById(env.DB, readingId);
   if (!reading || reading.status !== "suspicious") {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Показание не найдено или уже обработано.",
     });
@@ -65,7 +81,7 @@ export async function handleAdminConfirmReading(
     },
   });
 
-  return redirectWithMessage("/admin", {
+  return redirectWithMessage(backPath, {
     kind: "ok",
     text: "Показание подтверждено.",
   });
@@ -91,16 +107,17 @@ export async function handleAdminCorrectReading(
   const readingId = Number(form.get("reading_id"));
   const rawValue = String(form.get("value") ?? "");
   const comment = String(form.get("comment") ?? "").trim();
+  const backPath = sanitizeReturnTo(form.get("return_to"));
 
   if (!Number.isInteger(readingId) || readingId <= 0) {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Некорректный номер показания.",
     });
   }
 
   if (comment.length === 0) {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Укажите причину исправления.",
     });
@@ -115,7 +132,7 @@ export async function handleAdminCorrectReading(
   const parsed = parseReadingInput(rawValue, maxDecimals);
 
   if (!parsed.ok) {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Не удалось распознать введённое значение.",
     });
@@ -123,7 +140,7 @@ export async function handleAdminCorrectReading(
 
   const reading = await findReadingById(env.DB, readingId);
   if (!reading || reading.status !== "suspicious") {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Показание не найдено или уже обработано.",
     });
@@ -131,7 +148,7 @@ export async function handleAdminCorrectReading(
 
   const meter = await findMeterById(env.DB, reading.meter_id);
   if (!meter) {
-    return redirectWithMessage("/admin", {
+    return redirectWithMessage(backPath, {
       kind: "error",
       text: "Счётчик не найден.",
     });
@@ -167,7 +184,7 @@ export async function handleAdminCorrectReading(
     },
   });
 
-  return redirectWithMessage("/admin", {
+  return redirectWithMessage(backPath, {
     kind: "ok",
     text: "Показание исправлено.",
   });

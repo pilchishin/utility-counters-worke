@@ -76,8 +76,7 @@ export async function findMeterForApartment(
  *
  * Используется только в административной панели, где вызывающий код
  * уже прошёл проверку пароля администратора и работает с данными,
- * полученными не от жильца, а из собственной выборки панели
- * (например, списка подозрительных показаний).
+ * полученными не от жильца, а из собственной выборки панели.
  */
 export async function findMeterById(
   db: D1Database,
@@ -125,4 +124,118 @@ export async function findMeterGroupForApartment(
     .all<MeterRow>();
 
   return result.results;
+}
+
+/**
+ * Счётчик вместе со служебными полями учёта — используется только
+ * административной панелью (карточка квартиры, замена, снятие с учёта).
+ */
+export interface AdminMeterRow extends MeterRow {
+  is_active: number;
+  installed_at: string;
+  decommissioned_at: string | null;
+  replaced_by_meter_id: number | null;
+}
+
+const ADMIN_METER_SELECT = `
+  SELECT m.id, m.apartment_id, m.tariff_zone, m.serial_number,
+         m.initial_reading, m.is_active, m.installed_at,
+         m.decommissioned_at, m.replaced_by_meter_id,
+         rt.code AS resource_code, rt.name AS resource_name, rt.unit AS unit
+  FROM meters m
+  JOIN resource_types rt ON rt.id = m.resource_type_id
+`;
+
+/** Все счётчики квартиры (активные и снятые с учёта) для карточки квартиры. */
+export async function listAllMetersForApartment(
+  db: D1Database,
+  apartmentId: number
+): Promise<AdminMeterRow[]> {
+  const result = await db
+    .prepare(
+      `${ADMIN_METER_SELECT}
+       WHERE m.apartment_id = ?
+       ORDER BY m.is_active DESC, rt.id, m.serial_number, ${ZONE_ORDER}`
+    )
+    .bind(apartmentId)
+    .all<AdminMeterRow>();
+
+  return result.results;
+}
+
+/** Счётчик по id со служебными полями — для действий администратора. */
+export async function findAdminMeterById(
+  db: D1Database,
+  meterId: number
+): Promise<AdminMeterRow | null> {
+  const row = await db
+    .prepare(`${ADMIN_METER_SELECT} WHERE m.id = ?`)
+    .bind(meterId)
+    .first<AdminMeterRow>();
+
+  return row ?? null;
+}
+
+export interface NewMeterParams {
+  apartmentId: number;
+  resourceTypeId: number;
+  tariffZone: string | null;
+  serialNumber: string | null;
+  initialReading: number;
+  installedAt: string;
+}
+
+/** Создаёт новый активный счётчик. Возвращает id созданной записи. */
+export async function insertMeter(
+  db: D1Database,
+  params: NewMeterParams
+): Promise<number> {
+  const result = await db
+    .prepare(
+      `INSERT INTO meters
+         (apartment_id, resource_type_id, tariff_zone, serial_number, initial_reading, installed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      params.apartmentId,
+      params.resourceTypeId,
+      params.tariffZone,
+      params.serialNumber,
+      params.initialReading,
+      params.installedAt
+    )
+    .run();
+
+  return result.meta.last_row_id;
+}
+
+/** Снимает счётчик с учёта без замены. */
+export async function decommissionMeter(
+  db: D1Database,
+  meterId: number,
+  decommissionedAt: string
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE meters SET is_active = 0, decommissioned_at = ? WHERE id = ? AND is_active = 1"
+    )
+    .bind(decommissionedAt, meterId)
+    .run();
+}
+
+/** Помечает старый счётчик как заменённый новым (используется при замене). */
+export async function markMeterReplaced(
+  db: D1Database,
+  oldMeterId: number,
+  newMeterId: number,
+  decommissionedAt: string
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE meters
+       SET is_active = 0, decommissioned_at = ?, replaced_by_meter_id = ?
+       WHERE id = ? AND is_active = 1`
+    )
+    .bind(decommissionedAt, newMeterId, oldMeterId)
+    .run();
 }

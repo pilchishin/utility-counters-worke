@@ -38,6 +38,24 @@ async function findPeriod(
 }
 
 /**
+ * Период по id со всеми полями — используется административными
+ * действиями (ручное закрытие, повторное открытие).
+ */
+export async function findPeriodByIdFull(
+  db: D1Database,
+  periodId: number
+): Promise<BillingPeriodRow | null> {
+  const row = await db
+    .prepare(
+      "SELECT id, year, month, starts_at, ends_at, status FROM billing_periods WHERE id = ?"
+    )
+    .bind(periodId)
+    .first<BillingPeriodRow>();
+
+  return row ?? null;
+}
+
+/**
  * Возвращает расчётный период текущего МЕСТНОГО месяца (часовой пояс
  * берётся из system_settings.timezone). Если периода ещё нет — создаёт
  * его со статусом 'collecting', используя настройки billing_day_start
@@ -131,6 +149,9 @@ export async function listCollectingPeriods(
 /**
  * Закрывает период. Возвращает true, если период был закрыт именно
  * этим вызовом (false — он уже был закрыт).
+ *
+ * Используется и планировщиком (автоматическое закрытие по сроку),
+ * и администратором (ручное закрытие раньше срока).
  */
 export async function closePeriod(
   db: D1Database,
@@ -139,6 +160,32 @@ export async function closePeriod(
   const result = await db
     .prepare(
       "UPDATE billing_periods SET status = 'closed', closed_at = datetime('now') WHERE id = ? AND status = 'collecting'"
+    )
+    .bind(periodId)
+    .run();
+
+  return result.meta.changes > 0;
+}
+
+/**
+ * Открывает закрытый период заново — административная операция.
+ * Возвращает true, если период был открыт именно этим вызовом
+ * (false — он уже был открыт).
+ *
+ * После повторного открытия жильцы снова могут подавать и исправлять
+ * показания за этот период через бота. Cron не закроет его повторно
+ * немедленно: закрытие по расписанию срабатывает только когда для
+ * периода наступает условие закрытия (конец месяца или истечение
+ * period_close_grace_days после дедлайна) — то есть механизм не
+ * требует отдельной защиты от "мгновенного повторного закрытия".
+ */
+export async function reopenPeriod(
+  db: D1Database,
+  periodId: number
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      "UPDATE billing_periods SET status = 'collecting', closed_at = NULL WHERE id = ? AND status = 'closed'"
     )
     .bind(periodId)
     .run();

@@ -7,11 +7,32 @@ import {
   handleAdminApartmentAdd,
   handleAdminApartmentToggle,
   handleAdminApartmentReissueCode,
+  handleAdminExportAll,
 } from "./handlers/adminApartments";
+import { handleAdminApartmentDetail } from "./handlers/adminApartmentDetail";
+import {
+  handleAdminUserAdd,
+  handleAdminUserUnbind,
+  handleAdminUserSetBlocked,
+} from "./handlers/adminUsers";
+import {
+  handleAdminMeterAdd,
+  handleAdminMeterDecommission,
+  handleAdminMeterReplace,
+} from "./handlers/adminMeters";
 import {
   handleAdminConfirmReading,
   handleAdminCorrectReading,
 } from "./handlers/adminReadingActions";
+import {
+  handleAdminReportsPage,
+  handleAdminReportExport,
+} from "./handlers/adminReports";
+import {
+  handleAdminPeriodClose,
+  handleAdminPeriodReopen,
+} from "./handlers/adminPeriods";
+import { handleAdminLogPage } from "./handlers/adminLog";
 import { runScheduledTasks } from "./services/scheduler";
 
 /**
@@ -30,6 +51,16 @@ export interface Env {
   MANUAL_RUN_TOKEN?: string;
   // Пароль администратора для HTTP Basic Auth в /admin.
   ADMIN_PASSWORD?: string;
+}
+
+/** Извлекает первую группу из регулярного выражения как целое число, или null. */
+function matchId(pattern: RegExp, pathname: string): number | null {
+  const match = pattern.exec(pathname);
+  if (!match) {
+    return null;
+  }
+  const id = Number(match[1]);
+  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 export default {
@@ -64,7 +95,39 @@ export default {
       return handleAdminDashboard(request, env);
     }
 
-    // Административная панель: квартиры.
+    // Административная панель: журнал событий.
+    if (pathname === "/admin/log" && method === "GET") {
+      return handleAdminLogPage(request, env);
+    }
+
+    // Административная панель: отчёты и экспорт по периоду.
+    // Порядок важен: более специфичные пути проверяются раньше общих.
+    if (pathname === "/admin/reports/export" && method === "GET") {
+      return handleAdminReportExport(request, env);
+    }
+    if (pathname === "/admin/reports" && method === "GET") {
+      return handleAdminReportsPage(request, env);
+    }
+
+    // Административная панель: управление статусом периода.
+    const periodCloseId = method === "POST"
+      ? matchId(/^\/admin\/periods\/(\d+)\/close$/, pathname)
+      : null;
+    if (periodCloseId !== null) {
+      return handleAdminPeriodClose(request, env, periodCloseId);
+    }
+
+    const periodReopenId = method === "POST"
+      ? matchId(/^\/admin\/periods\/(\d+)\/reopen$/, pathname)
+      : null;
+    if (periodReopenId !== null) {
+      return handleAdminPeriodReopen(request, env, periodReopenId);
+    }
+
+    // Административная панель: список квартир и полный экспорт.
+    if (pathname === "/admin/apartments/export-all" && method === "GET") {
+      return handleAdminExportAll(request, env);
+    }
     if (pathname === "/admin/apartments" && method === "GET") {
       return handleAdminApartmentsPage(request, env);
     }
@@ -76,6 +139,65 @@ export default {
     }
     if (pathname === "/admin/apartments/reissue-code" && method === "POST") {
       return handleAdminApartmentReissueCode(request, env);
+    }
+
+    // Административная панель: карточка квартиры.
+    const apartmentDetailId = method === "GET"
+      ? matchId(/^\/admin\/apartments\/(\d+)$/, pathname)
+      : null;
+    if (apartmentDetailId !== null) {
+      return handleAdminApartmentDetail(request, env, apartmentDetailId);
+    }
+
+    // Административная панель: жильцы конкретной квартиры.
+    const userAddApartmentId = method === "POST"
+      ? matchId(/^\/admin\/apartments\/(\d+)\/users\/add$/, pathname)
+      : null;
+    if (userAddApartmentId !== null) {
+      return handleAdminUserAdd(request, env, userAddApartmentId);
+    }
+
+    const userUnbindId = method === "POST"
+      ? matchId(/^\/admin\/users\/(\d+)\/unbind$/, pathname)
+      : null;
+    if (userUnbindId !== null) {
+      return handleAdminUserUnbind(request, env, userUnbindId);
+    }
+
+    const userBlockId = method === "POST"
+      ? matchId(/^\/admin\/users\/(\d+)\/block$/, pathname)
+      : null;
+    if (userBlockId !== null) {
+      return handleAdminUserSetBlocked(request, env, userBlockId, true);
+    }
+
+    const userUnblockId = method === "POST"
+      ? matchId(/^\/admin\/users\/(\d+)\/unblock$/, pathname)
+      : null;
+    if (userUnblockId !== null) {
+      return handleAdminUserSetBlocked(request, env, userUnblockId, false);
+    }
+
+    // Административная панель: счётчики конкретной квартиры.
+    const meterAddApartmentId = method === "POST"
+      ? matchId(/^\/admin\/apartments\/(\d+)\/meters\/add$/, pathname)
+      : null;
+    if (meterAddApartmentId !== null) {
+      return handleAdminMeterAdd(request, env, meterAddApartmentId);
+    }
+
+    const meterDecommissionId = method === "POST"
+      ? matchId(/^\/admin\/meters\/(\d+)\/decommission$/, pathname)
+      : null;
+    if (meterDecommissionId !== null) {
+      return handleAdminMeterDecommission(request, env, meterDecommissionId);
+    }
+
+    const meterReplaceId = method === "POST"
+      ? matchId(/^\/admin\/meters\/(\d+)\/replace$/, pathname)
+      : null;
+    if (meterReplaceId !== null) {
+      return handleAdminMeterReplace(request, env, meterReplaceId);
     }
 
     // Административная панель: действия с показаниями.
