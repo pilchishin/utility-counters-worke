@@ -1,0 +1,174 @@
+import type { Env } from "../index";
+import { checkAdminAuth, unauthorizedResponse } from "../services/adminAuth";
+import { redirectWithMessage } from "../services/adminLayout";
+import {
+  findReadingById,
+  findPreviousReadingValue,
+  adminConfirmReading,
+  adminCorrectReading,
+} from "../db/readings";
+import { findMeterById } from "../db/meters";
+import { getSettingNumber } from "../db/settings";
+import { logEvent } from "../db/eventLog";
+import { parseReadingInput } from "../services/numberParser";
+
+const NOT_CONFIGURED_MESSAGE =
+  "Административная панель ещё не настроена: не задан пароль администратора.";
+
+function roundTo3(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+/**
+ * Администратор подтверждает: подозрительное значение верное.
+ * Само значение не меняется, показание переводится в статус 'ok'.
+ */
+export async function handleAdminConfirmReading(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (!env.ADMIN_PASSWORD) {
+    return new Response(NOT_CONFIGURED_MESSAGE, { status: 503 });
+  }
+  if (!checkAdminAuth(request, env)) {
+    return unauthorizedResponse();
+  }
+
+  const form = await request.formData();
+  const readingId = Number(form.get("reading_id"));
+
+  if (!Number.isInteger(readingId) || readingId <= 0) {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Некорректный номер показания.",
+    });
+  }
+
+  const reading = await findReadingById(env.DB, readingId);
+  if (!reading || reading.status !== "suspicious") {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Показание не найдено или уже обработано.",
+    });
+  }
+
+  await adminConfirmReading(env.DB, readingId);
+
+  await logEvent(env.DB, {
+    entityType: "reading",
+    entityId: readingId,
+    action: "reading_confirmed_by_admin",
+    payload: {
+      meter_id: reading.meter_id,
+      value: reading.value,
+      previous_flag_reason: reading.flag_reason,
+    },
+  });
+
+  return redirectWithMessage("/admin", {
+    kind: "ok",
+    text: "Показание подтверждено.",
+  });
+}
+
+/**
+ * Администратор исправляет значение показания. Причина обязательна
+ * и сохраняется в readings.correction_comment — это ответ на вопрос
+ * "почему изменили" при последующем разборе.
+ */
+export async function handleAdminCorrectReading(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (!env.ADMIN_PASSWORD) {
+    return new Response(NOT_CONFIGURED_MESSAGE, { status: 503 });
+  }
+  if (!checkAdminAuth(request, env)) {
+    return unauthorizedResponse();
+  }
+
+  const form = await request.formData();
+  const readingId = Number(form.get("reading_id"));
+  const rawValue = String(form.get("value") ?? "");
+  const comment = String(form.get("comment") ?? "").trim();
+
+  if (!Number.isInteger(readingId) || readingId <= 0) {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Некорректный номер показания.",
+    });
+  }
+
+  if (comment.length === 0) {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Укажите причину исправления.",
+    });
+  }
+
+  const maxDecimalsSetting = await getSettingNumber(
+    env.DB,
+    "max_decimal_digits",
+    3
+  );
+  const maxDecimals = Math.min(Math.max(Math.trunc(maxDecimalsSetting), 0), 6);
+  const parsed = parseReadingInput(rawValue, maxDecimals);
+
+  if (!parsed.ok) {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Не удалось распознать введённое значение.",
+    });
+  }
+
+  const reading = await findReadingById(env.DB, readingId);
+  if (!reading || reading.status !== "suspicious") {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Показание не найдено или уже обработано.",
+    });
+  }
+
+  const meter = await findMeterById(env.DB, reading.meter_id);
+  if (!meter) {
+    return redirectWithMessage("/admin", {
+      kind: "error",
+      text: "Счётчик не найден.",
+    });
+  }
+
+  const previous = await findPreviousReadingValue(
+    env.DB,
+    meter.id,
+    reading.period_year,
+    reading.period_month
+  );
+  const baseValue = previous !== null ? previous : meter.initial_reading;
+  const consumption = roundTo3(parsed.value - baseValue);
+
+  await adminCorrectReading(env.DB, readingId, {
+    value: parsed.value,
+    consumption,
+    comment,
+  });
+
+  await logEvent(env.DB, {
+    entityType: "reading",
+    entityId: readingId,
+    action: "reading_corrected",
+    payload: {
+      meter_id: meter.id,
+      old_value: reading.value,
+      new_value: parsed.value,
+      old_status: reading.status,
+      new_status: "corrected",
+      by: "admin_panel",
+      reason: comment,
+    },
+  });
+
+  return redirectWithMessage("/admin", {
+    kind: "ok",
+    text: "Показание исправлено.",
+  });
+}

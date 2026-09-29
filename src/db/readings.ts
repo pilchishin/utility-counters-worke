@@ -141,7 +141,8 @@ export interface UpdateReadingParams {
 }
 
 /**
- * Заменяет значение уже существующего показания.
+ * Заменяет значение уже существующего показания (используется
+ * жильцом при повторном вводе за тот же период).
  * Старое значение вызывающий код обязан записать в event_log.
  */
 export async function updateReadingValue(
@@ -164,5 +165,88 @@ export async function updateReadingValue(
       params.userId,
       readingId
     )
+    .run();
+}
+
+export interface ReadingWithPeriodRow {
+  id: number;
+  meter_id: number;
+  billing_period_id: number;
+  value: number;
+  consumption: number | null;
+  status: string;
+  flag_reason: string | null;
+  period_year: number;
+  period_month: number;
+}
+
+/**
+ * Показание по id вместе с годом/месяцем его периода —
+ * используется административными действиями (подтвердить/исправить).
+ */
+export async function findReadingById(
+  db: D1Database,
+  readingId: number
+): Promise<ReadingWithPeriodRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT r.id AS id, r.meter_id AS meter_id, r.billing_period_id AS billing_period_id,
+              r.value AS value, r.consumption AS consumption, r.status AS status,
+              r.flag_reason AS flag_reason,
+              bp.year AS period_year, bp.month AS period_month
+       FROM readings r
+       JOIN billing_periods bp ON bp.id = r.billing_period_id
+       WHERE r.id = ?`
+    )
+    .bind(readingId)
+    .first<ReadingWithPeriodRow>();
+
+  return row ?? null;
+}
+
+export interface AdminCorrectionParams {
+  value: number;
+  consumption: number | null;
+  comment: string;
+}
+
+/**
+ * Исправление показания администратором.
+ *
+ * В отличие от updateReadingValue (которым жилец сам заменяет своё
+ * значение), эта функция фиксирует причину исправления
+ * (correction_comment) и всегда переводит показание в статус
+ * 'corrected' — как показание, изменённое администратором, а не
+ * жильцом.
+ */
+export async function adminCorrectReading(
+  db: D1Database,
+  readingId: number,
+  params: AdminCorrectionParams
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE readings
+       SET value = ?, consumption = ?, status = 'corrected', flag_reason = NULL,
+           correction_comment = ?, corrected_by_user_id = NULL
+       WHERE id = ?`
+    )
+    .bind(params.value, params.consumption, params.comment, readingId)
+    .run();
+}
+
+/**
+ * Подтверждение администратором: значение верное, несмотря на пометку.
+ * Само значение не меняется, статус переводится в 'ok'.
+ */
+export async function adminConfirmReading(
+  db: D1Database,
+  readingId: number
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE readings SET status = 'ok' WHERE id = ? AND status = 'suspicious'"
+    )
+    .bind(readingId)
     .run();
 }
