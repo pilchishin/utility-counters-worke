@@ -10,6 +10,7 @@ import {
 import { findApartmentById, countActiveUsersForApartment } from "../db/apartments";
 import { getSettingNumber } from "../db/settings";
 import { logEvent } from "../db/eventLog";
+import { removePendingRegistration } from "../db/pendingRegistrations";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -70,6 +71,9 @@ export async function handleAdminUserAdd(
       text: "Этот Telegram ID уже привязан к другой активной квартире.",
     });
   }
+
+  // Привязка состоялась — человек больше не "ожидает привязки".
+  await removePendingRegistration(env.DB, tgId);
 
   await logEvent(env.DB, {
     entityType: "telegram_user",

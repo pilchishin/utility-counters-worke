@@ -12,10 +12,15 @@ import type { TelegramUserRow } from "../db/telegramUsers";
 import { listAllMetersForApartment } from "../db/meters";
 import type { AdminMeterRow } from "../db/meters";
 import { listActiveResourceTypes } from "../db/resourceTypes";
+import { listPendingRegistrations } from "../db/pendingRegistrations";
+import type { PendingRegistrationRow } from "../db/pendingRegistrations";
 import { meterTitle, formatValue, formatDateRu } from "../services/format";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
+
+// Сколько ожидающих привязки показывать на карточке квартиры.
+const PENDING_LIST_LIMIT = 20;
 
 /** Карточка квартиры: жильцы и счётчики. */
 export async function handleAdminApartmentDetail(
@@ -37,6 +42,7 @@ export async function handleAdminApartmentDetail(
 
   const url = new URL(request.url);
   const users = await listActiveUsersForApartment(env.DB, apartmentId);
+  const pending = await listPendingRegistrations(env.DB, PENDING_LIST_LIMIT);
   const meters = await listAllMetersForApartment(env.DB, apartmentId);
   const resourceTypes = await listActiveResourceTypes(env.DB);
 
@@ -44,7 +50,7 @@ export async function handleAdminApartmentDetail(
     `Квартира №${apartment.number}`,
     "apartments",
     readFlashMessage(url),
-    renderBody(apartmentId, apartment.number, users, meters, resourceTypes)
+    renderBody(apartmentId, apartment.number, users, pending, meters, resourceTypes)
   );
 
   return new Response(html, {
@@ -78,7 +84,55 @@ function renderUserRow(user: TelegramUserRow): string {
   </tr>`;
 }
 
-function renderUsersSection(apartmentId: number, users: TelegramUserRow[]): string {
+/** Строка списка "ожидают привязки" с кнопкой быстрой привязки к этой квартире. */
+function renderPendingRow(
+  apartmentId: number,
+  row: PendingRegistrationRow
+): string {
+  return `<tr>
+    <td>${row.tg_id}</td>
+    <td>${escapeHtml(row.first_seen)}</td>
+    <td>${escapeHtml(row.last_seen)}</td>
+    <td>
+      <form class="inline" method="post" action="/admin/apartments/${apartmentId}/users/add">
+        <input type="hidden" name="tg_id" value="${row.tg_id}">
+        <button type="submit">Привязать к этой квартире</button>
+      </form>
+    </td>
+  </tr>`;
+}
+
+/**
+ * Раздел "Ожидают привязки" — список Telegram ID, которые писали боту,
+ * но ещё не введены в базу как жильцы ни одной квартиры. Список общий
+ * для всех квартир (бот заранее не знает, к какой квартире относится
+ * обратившийся), поэтому показывается одинаково на любой карточке.
+ */
+function renderPendingSection(
+  apartmentId: number,
+  pending: PendingRegistrationRow[]
+): string {
+  if (pending.length === 0) {
+    return "";
+  }
+
+  const rows = pending
+    .map((row) => renderPendingRow(apartmentId, row))
+    .join("\n");
+
+  return `
+  <h3 style="margin-top:16px;font-size:14px;">Ожидают привязки (написали боту, но не ввели код)</h3>
+  <table>
+    <thead><tr><th>Telegram ID</th><th>Впервые</th><th>Последний раз</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function renderUsersSection(
+  apartmentId: number,
+  users: TelegramUserRow[],
+  pending: PendingRegistrationRow[]
+): string {
   const rows = users.length
     ? users.map(renderUserRow).join("\n")
     : `<tr><td colspan="5">К квартире не привязано ни одного аккаунта.</td></tr>`;
@@ -90,8 +144,11 @@ function renderUsersSection(apartmentId: number, users: TelegramUserRow[]): stri
     <tbody>${rows}</tbody>
   </table>
 
+  ${renderPendingSection(apartmentId, pending)}
+
+  <h3 style="margin-top:16px;font-size:14px;">Привязать вручную по Telegram ID</h3>
   <form class="add-form" method="post" action="/admin/apartments/${apartmentId}/users/add">
-    <label>Telegram ID жильца (узнайте у него, например, через @userinfobot)
+    <label>Telegram ID жильца (если его нет в списке выше — узнайте у него, например, через @userinfobot)
       <input type="number" name="tg_id" required min="1" step="1">
     </label>
     <div style="margin-top:12px;"><button type="submit">Привязать вручную</button></div>
@@ -194,13 +251,14 @@ function renderBody(
   apartmentId: number,
   apartmentNumber: string,
   users: TelegramUserRow[],
+  pending: PendingRegistrationRow[],
   meters: AdminMeterRow[],
   resourceTypes: { id: number; code: string; name: string; unit: string }[]
 ): string {
   return `
   <a class="back-link" href="/admin/apartments">← Все квартиры</a>
   <h2 style="margin-top:8px;">Квартира №${escapeHtml(apartmentNumber)}</h2>
-  ${renderUsersSection(apartmentId, users)}
+  ${renderUsersSection(apartmentId, users, pending)}
   ${renderMetersSection(apartmentId, meters, resourceTypes)}
   `;
 }
