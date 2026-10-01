@@ -9,11 +9,10 @@ import { countMetersAndReadings } from "../db/reminders";
 import { logEvent } from "../db/eventLog";
 import { getLocalDateTime, addDaysIso } from "../utils/localTime";
 import type { LocalDateTime } from "../utils/localTime";
-import {
-  runReminders,
-  runAdminReport,
-} from "./reminders";
+import { runReminders, runAdminReport } from "./reminders";
 import type { ReminderRunResult, AdminReportResult } from "./reminders";
+import { runBackupIfDue } from "./backup";
+import type { BackupRunResult } from "./backup";
 
 /**
  * Периодические задачи (вызываются Cron Trigger раз в час).
@@ -32,6 +31,7 @@ export interface ScheduledRunSummary {
   reminders: ReminderRunResult | null;
   adminReport: AdminReportResult | null;
   closedPeriods: string[];
+  backup: BackupRunResult | null;
   errors: string[];
 }
 
@@ -128,6 +128,7 @@ export async function runScheduledTasks(
     reminders: null,
     adminReport: null,
     closedPeriods: [],
+    backup: null,
     errors,
   };
 
@@ -162,6 +163,11 @@ export async function runScheduledTasks(
   if (closed) {
     summary.closedPeriods = closed;
   }
+
+  // Шаг 5. Еженедельный автоматический бэкап в R2 (если наступило время).
+  summary.backup = await runStep("бэкап", errors, () =>
+    runBackupIfDue(env, now)
+  );
 
   return summary;
 }

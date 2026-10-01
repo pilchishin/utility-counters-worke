@@ -4,7 +4,7 @@
  * обработчике страницы.
  */
 
-export type AdminNavItem = "dashboard" | "apartments" | "reports" | "log";
+export type AdminNavItem = "dashboard" | "apartments" | "reports" | "log" | "backups";
 
 export interface FlashMessage {
   kind: "ok" | "error";
@@ -62,12 +62,14 @@ function renderNav(active: AdminNavItem): string {
   const apartmentsClass = active === "apartments" ? "nav-active" : "";
   const reportsClass = active === "reports" ? "nav-active" : "";
   const logClass = active === "log" ? "nav-active" : "";
+  const backupsClass = active === "backups" ? "nav-active" : "";
 
   return `<nav>
     <a class="${dashboardClass}" href="/admin">Обзор</a>
     <a class="${apartmentsClass}" href="/admin/apartments">Квартиры</a>
     <a class="${reportsClass}" href="/admin/reports">Отчёты</a>
     <a class="${logClass}" href="/admin/log">Журнал</a>
+    <a class="${backupsClass}" href="/admin/backups">Бэкапы</a>
   </nav>`;
 }
 

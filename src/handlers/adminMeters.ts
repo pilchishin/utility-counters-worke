@@ -7,6 +7,7 @@ import {
   insertMeter,
   decommissionMeter,
   markMeterReplaced,
+  updateMeterDetails,
 } from "../db/meters";
 import { logEvent } from "../db/eventLog";
 
@@ -211,6 +212,86 @@ export async function handleAdminMeterReplace(
   return redirectWithMessage(backPath, {
     kind: "ok",
     text: "Счётчик заменён.",
+  });
+}
+
+/**
+ * Точечное исправление данных счётчика (серийный номер, дата установки,
+ * начальное показание) без создания новой записи.
+ *
+ * Начальное показание меняется, только если по счётчику ещё нет ни
+ * одного поданного показания (readings_count === 0) — иначе изменение
+ * задним числом исказило бы уже рассчитанные расходы. Если показания
+ * уже есть, поле просто игнорируется (сервер — источник истины, а не
+ * то, было ли оно доступно для ввода в форме).
+ */
+export async function handleAdminMeterEdit(
+  request: Request,
+  env: Env,
+  meterId: number
+): Promise<Response> {
+  const denied = guard(request, env);
+  if (denied) return denied;
+
+  const meter = await findAdminMeterById(env.DB, meterId);
+  if (!meter) {
+    return redirectWithMessage("/admin/apartments", {
+      kind: "error",
+      text: "Счётчик не найден.",
+    });
+  }
+
+  const backPath = `/admin/apartments/${meter.apartment_id}`;
+
+  const form = await request.formData();
+  const serialNumberRaw = String(form.get("serial_number") ?? "").trim();
+  const serialNumber = serialNumberRaw.length > 0 ? serialNumberRaw : null;
+  const installedAt = String(form.get("installed_at") ?? "");
+  const rawInitialReading = form.get("initial_reading");
+
+  if (!ISO_DATE_PATTERN.test(installedAt)) {
+    return redirectWithMessage(backPath, {
+      kind: "error",
+      text: "Укажите корректную дату установки.",
+    });
+  }
+
+  let newInitialReading: number | null = null;
+  if (meter.readings_count === 0 && rawInitialReading !== null) {
+    const parsedInitial = Number(rawInitialReading);
+    if (!Number.isFinite(parsedInitial) || parsedInitial < 0) {
+      return redirectWithMessage(backPath, {
+        kind: "error",
+        text: "Некорректное начальное показание.",
+      });
+    }
+    newInitialReading = parsedInitial;
+  }
+
+  await updateMeterDetails(env.DB, meterId, {
+    serialNumber,
+    installedAt,
+    initialReading: newInitialReading,
+  });
+
+  await logEvent(env.DB, {
+    entityType: "meter",
+    entityId: meterId,
+    action: "meter_edited",
+    payload: {
+      old_serial_number: meter.serial_number,
+      new_serial_number: serialNumber,
+      old_installed_at: meter.installed_at,
+      new_installed_at: installedAt,
+      old_initial_reading: meter.initial_reading,
+      new_initial_reading: newInitialReading ?? meter.initial_reading,
+      by: "admin_panel",
+    },
+  });
+
+  return redirectWithMessage(backPath, {
+    kind: "ok",
+    text: "Данные счётчика обновлены.",
   });
 }
 

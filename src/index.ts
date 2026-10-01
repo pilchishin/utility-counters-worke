@@ -19,6 +19,7 @@ import {
   handleAdminMeterAdd,
   handleAdminMeterDecommission,
   handleAdminMeterReplace,
+  handleAdminMeterEdit,
 } from "./handlers/adminMeters";
 import {
   handleAdminConfirmReading,
@@ -33,6 +34,12 @@ import {
   handleAdminPeriodReopen,
 } from "./handlers/adminPeriods";
 import { handleAdminLogPage } from "./handlers/adminLog";
+import {
+  handleAdminBackupsPage,
+  handleAdminBackupDownload,
+  handleAdminBackupDelete,
+  handleAdminBackupRun,
+} from "./handlers/adminBackups";
 import { runScheduledTasks } from "./services/scheduler";
 
 /**
@@ -41,12 +48,14 @@ import { runScheduledTasks } from "./services/scheduler";
  * Секреты (TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, MANUAL_RUN_TOKEN,
  * ADMIN_PASSWORD) задаются командой `wrangler secret put <ИМЯ>` и НЕ
  * хранятся ни в коде, ни в wrangler.jsonc. DB — биндинг на базу данных
- * D1 "et14a", настраивается в wrangler.jsonc.
+ * D1 "et14a", et14a_bucket — биндинг на хранилище R2 "et14a" для
+ * резервных копий; оба настроены в wrangler.jsonc.
  */
 export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   WEBHOOK_SECRET: string;
   DB: D1Database;
+  et14a_bucket: R2Bucket;
   // Необязательный временный секрет для ручного запуска планировщика (тесты).
   MANUAL_RUN_TOKEN?: string;
   // Пароль администратора для HTTP Basic Auth в /admin.
@@ -100,8 +109,22 @@ export default {
       return handleAdminLogPage(request, env);
     }
 
-    // Административная панель: отчёты и экспорт по периоду.
+    // Административная панель: бэкапы.
     // Порядок важен: более специфичные пути проверяются раньше общих.
+    if (pathname === "/admin/backups/download" && method === "GET") {
+      return handleAdminBackupDownload(request, env);
+    }
+    if (pathname === "/admin/backups/delete" && method === "POST") {
+      return handleAdminBackupDelete(request, env);
+    }
+    if (pathname === "/admin/backups/run" && method === "POST") {
+      return handleAdminBackupRun(request, env);
+    }
+    if (pathname === "/admin/backups" && method === "GET") {
+      return handleAdminBackupsPage(request, env);
+    }
+
+    // Административная панель: отчёты и экспорт по периоду.
     if (pathname === "/admin/reports/export" && method === "GET") {
       return handleAdminReportExport(request, env);
     }
@@ -198,6 +221,13 @@ export default {
       : null;
     if (meterReplaceId !== null) {
       return handleAdminMeterReplace(request, env, meterReplaceId);
+    }
+
+    const meterEditId = method === "POST"
+      ? matchId(/^\/admin\/meters\/(\d+)\/edit$/, pathname)
+      : null;
+    if (meterEditId !== null) {
+      return handleAdminMeterEdit(request, env, meterEditId);
     }
 
     // Административная панель: действия с показаниями.

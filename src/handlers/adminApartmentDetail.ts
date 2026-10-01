@@ -183,12 +183,44 @@ function renderMeterRow(meter: AdminMeterRow): string {
       </td>`
     : `<td colspan="2">${meter.replaced_by_meter_id ? "заменён другим счётчиком" : ""}</td>`;
 
-  return `<tr>
+  const mainRow = `<tr>
     <td>${escapeHtml(meter.resource_name)}</td>
     <td>${title}</td>
     <td>${formatValue(meter.initial_reading)} ${escapeHtml(meter.unit)}</td>
     <td class="${statusClass}">${statusText}</td>
     ${actions}
+  </tr>`;
+
+  return mainRow + "\n" + renderMeterEditRow(meter);
+}
+
+/**
+ * Вторая строка на каждый счётчик: точечное исправление серийного
+ * номера, даты установки и (если по счётчику ещё нет показаний)
+ * начального показания — без создания новой записи, в отличие
+ * от "Заменить".
+ */
+function renderMeterEditRow(meter: AdminMeterRow): string {
+  const canEditInitial = meter.readings_count === 0;
+
+  const initialField = canEditInitial
+    ? `<input type="number" step="0.001" min="0" name="initial_reading"
+              value="${formatValue(meter.initial_reading)}" style="width:120px;">`
+    : `<span class="status-inactive" title="По счётчику уже есть поданные показания — начальное значение менять нельзя">
+         ${formatValue(meter.initial_reading)} ${escapeHtml(meter.unit)} (не редактируется)
+       </span>`;
+
+  return `<tr>
+    <td colspan="6" style="background:#f7f7f7;">
+      <form class="correction" method="post" action="/admin/meters/${meter.id}/edit">
+        <span style="font-size:12px;color:#666;">Исправить данные:</span>
+        <input type="text" name="serial_number" placeholder="Серийный номер"
+               value="${escapeHtml(meter.serial_number ?? "")}" style="width:140px;">
+        <input type="date" name="installed_at" value="${meter.installed_at}">
+        ${initialField}
+        <button type="submit">Сохранить</button>
+      </form>
+    </td>
   </tr>`;
 }
 
@@ -207,7 +239,7 @@ function renderMetersSection(
 ): string {
   const rows = meters.length
     ? meters.map(renderMeterRow).join("\n")
-    : `<tr><td colspan="5">Для квартиры не заведено ни одного счётчика.</td></tr>`;
+    : `<tr><td colspan="6">Для квартиры не заведено ни одного счётчика.</td></tr>`;
 
   return `
   <h2>Счётчики</h2>

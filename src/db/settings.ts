@@ -1,5 +1,5 @@
 /**
- * Чтение значений из таблицы system_settings.
+ * Чтение и запись значений в таблице system_settings.
  */
 
 /**
@@ -46,4 +46,22 @@ export async function getSettingText(
 
   const trimmed = row.value.trim();
   return trimmed.length > 0 ? trimmed : defaultValue;
+}
+
+/**
+ * Записывает текстовую настройку, создавая ключ, если его ещё нет.
+ * Используется планировщиком для отметки "дата последнего бэкапа".
+ */
+export async function setSettingText(
+  db: D1Database,
+  key: string,
+  value: string
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    )
+    .bind(key, value)
+    .run();
 }

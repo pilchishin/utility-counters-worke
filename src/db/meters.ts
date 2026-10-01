@@ -128,20 +128,25 @@ export async function findMeterGroupForApartment(
 
 /**
  * Счётчик вместе со служебными полями учёта — используется только
- * административной панелью (карточка квартиры, замена, снятие с учёта).
+ * административной панелью (карточка квартиры, замена, снятие с учёта,
+ * редактирование). readings_count — сколько показаний уже подано по
+ * этому счётчику; используется, чтобы запретить правку начального
+ * показания задним числом, если история расчётов уже строится на нём.
  */
 export interface AdminMeterRow extends MeterRow {
   is_active: number;
   installed_at: string;
   decommissioned_at: string | null;
   replaced_by_meter_id: number | null;
+  readings_count: number;
 }
 
 const ADMIN_METER_SELECT = `
   SELECT m.id, m.apartment_id, m.tariff_zone, m.serial_number,
          m.initial_reading, m.is_active, m.installed_at,
          m.decommissioned_at, m.replaced_by_meter_id,
-         rt.code AS resource_code, rt.name AS resource_name, rt.unit AS unit
+         rt.code AS resource_code, rt.name AS resource_name, rt.unit AS unit,
+         (SELECT COUNT(*) FROM readings r WHERE r.meter_id = m.id) AS readings_count
   FROM meters m
   JOIN resource_types rt ON rt.id = m.resource_type_id
 `;
@@ -237,5 +242,42 @@ export async function markMeterReplaced(
        WHERE id = ? AND is_active = 1`
     )
     .bind(decommissionedAt, newMeterId, oldMeterId)
+    .run();
+}
+
+export interface MeterDetailsUpdate {
+  serialNumber: string | null;
+  installedAt: string;
+  // null — не менять начальное показание (например, если по счётчику
+  // уже есть поданные показания и менять его нельзя).
+  initialReading: number | null;
+}
+
+/**
+ * Точечное исправление данных счётчика: серийный номер, дата установки
+ * и, при отсутствии поданных показаний, начальное показание.
+ *
+ * В отличие от замены счётчика (markMeterReplaced + insertMeter),
+ * эта операция не создаёт новую запись и не рвёт историю — она
+ * предназначена для исправления опечаток в уже существующей записи.
+ */
+export async function updateMeterDetails(
+  db: D1Database,
+  meterId: number,
+  update: MeterDetailsUpdate
+): Promise<void> {
+  if (update.initialReading !== null) {
+    await db
+      .prepare(
+        "UPDATE meters SET serial_number = ?, installed_at = ?, initial_reading = ? WHERE id = ?"
+      )
+      .bind(update.serialNumber, update.installedAt, update.initialReading, meterId)
+      .run();
+    return;
+  }
+
+  await db
+    .prepare("UPDATE meters SET serial_number = ?, installed_at = ? WHERE id = ?")
+    .bind(update.serialNumber, update.installedAt, meterId)
     .run();
 }
