@@ -8,6 +8,10 @@ import {
 } from "../db/billingPeriods";
 import { logEvent } from "../db/eventLog";
 import { periodLabel, capitalizeFirst } from "../services/format";
+import {
+  verifyCsrfToken,
+  csrfRejectedResponse,
+} from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -30,6 +34,11 @@ export async function handleAdminPeriodClose(
 ): Promise<Response> {
   const denied = guard(request, env);
   if (denied) return denied;
+
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
 
   const backPath = `/admin/reports?period=${periodId}`;
 
@@ -82,6 +91,11 @@ export async function handleAdminPeriodReopen(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const backPath = `/admin/reports?period=${periodId}`;
 
   const period = await findPeriodByIdFull(env.DB, periodId);
@@ -99,7 +113,6 @@ export async function handleAdminPeriodReopen(
     });
   }
 
-  const form = await request.formData();
   const reason = String(form.get("reason") ?? "").trim();
 
   if (reason.length === 0) {

@@ -11,6 +11,10 @@ import { findMeterById } from "../db/meters";
 import { getSettingNumber } from "../db/settings";
 import { logEvent } from "../db/eventLog";
 import { parseReadingInput } from "../services/numberParser";
+import {
+  verifyCsrfToken,
+  csrfRejectedResponse,
+} from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -50,6 +54,10 @@ export async function handleAdminConfirmReading(
   }
 
   const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const readingId = Number(form.get("reading_id"));
   const backPath = sanitizeReturnTo(form.get("return_to"));
 
@@ -104,6 +112,10 @@ export async function handleAdminCorrectReading(
   }
 
   const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const readingId = Number(form.get("reading_id"));
   const rawValue = String(form.get("value") ?? "");
   const comment = String(form.get("comment") ?? "").trim();

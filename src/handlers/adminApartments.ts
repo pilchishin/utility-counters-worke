@@ -17,6 +17,12 @@ import type { ApartmentRow } from "../db/apartments";
 import { generateAccessCode } from "../services/accessCode";
 import { logEvent } from "../db/eventLog";
 import { buildFullBackupZip } from "../services/backup";
+import {
+  computeCsrfToken,
+  csrfField,
+  verifyCsrfToken,
+  csrfRejectedResponse,
+} from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -38,12 +44,13 @@ export async function handleAdminApartmentsPage(
 
   const url = new URL(request.url);
   const apartments = await listAllApartmentsForAdmin(env.DB);
+  const csrfToken = await computeCsrfToken(env);
 
   const html = renderAdminPage(
     "Квартиры",
     "apartments",
     readFlashMessage(url),
-    renderApartmentsPageBody(apartments)
+    renderApartmentsPageBody(apartments, csrfToken)
   );
 
   return new Response(html, {
@@ -52,7 +59,7 @@ export async function handleAdminApartmentsPage(
   });
 }
 
-function renderApartmentRow(apartment: ApartmentRow): string {
+function renderApartmentRow(apartment: ApartmentRow, csrfToken: string): string {
   const statusClass = apartment.is_active ? "status-ok" : "status-inactive";
   const statusText = apartment.is_active ? "активна" : "отключена";
   const toggleLabel = apartment.is_active ? "Отключить" : "Включить";
@@ -64,6 +71,7 @@ function renderApartmentRow(apartment: ApartmentRow): string {
     <td class="${statusClass}">${statusText}</td>
     <td>
       <form class="inline" method="post" action="/admin/apartments/toggle">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="apartment_id" value="${apartment.id}">
         <button type="submit">${toggleLabel}</button>
       </form>
@@ -71,6 +79,7 @@ function renderApartmentRow(apartment: ApartmentRow): string {
     <td>
       <form class="inline" method="post" action="/admin/apartments/reissue-code"
             onsubmit="return confirm('Перевыпустить код доступа для квартиры №${escapeHtml(apartment.number)}? Старый код перестанет действовать.');">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="apartment_id" value="${apartment.id}">
         <button type="submit">Перевыпустить код</button>
       </form>
@@ -78,12 +87,17 @@ function renderApartmentRow(apartment: ApartmentRow): string {
   </tr>`;
 }
 
-function renderApartmentsPageBody(apartments: ApartmentRow[]): string {
-  const rows = apartments.map(renderApartmentRow).join("\n");
+function renderApartmentsPageBody(
+  apartments: ApartmentRow[],
+  csrfToken: string
+): string {
+  const rows = apartments
+    .map((apartment) => renderApartmentRow(apartment, csrfToken))
+    .join("\n");
 
   return `
   <div class="toolbar">
-    <a class="button-link" href="/admin/apartments/export-all">⬇ Экспорт всех данных (CSV, 3 файла)</a>
+    <a class="button-link" href="/admin/apartments/export-all">⬇ Экспорт всех данных (CSV, 5 файлов)</a>
   </div>
 
   <table>
@@ -93,6 +107,7 @@ function renderApartmentsPageBody(apartments: ApartmentRow[]): string {
 
   <h2>Добавить квартиру</h2>
   <form class="add-form" method="post" action="/admin/apartments/add">
+    ${csrfField(csrfToken)}
     <label>Номер квартиры
       <input type="text" name="number" required maxlength="20">
     </label>
@@ -117,6 +132,10 @@ export async function handleAdminApartmentAdd(
   }
 
   const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const number = String(form.get("number") ?? "").trim();
   const rawCode = String(form.get("code") ?? "").trim();
 
@@ -163,6 +182,10 @@ export async function handleAdminApartmentToggle(
   }
 
   const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const apartmentId = Number(form.get("apartment_id"));
 
   if (!Number.isInteger(apartmentId) || apartmentId <= 0) {
@@ -209,6 +232,10 @@ export async function handleAdminApartmentReissueCode(
   }
 
   const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const apartmentId = Number(form.get("apartment_id"));
 
   if (!Number.isInteger(apartmentId) || apartmentId <= 0) {
@@ -243,10 +270,10 @@ export async function handleAdminApartmentReissueCode(
 }
 
 /**
- * Полная выгрузка всех данных: три CSV-файла (квартиры, счётчики,
- * показания) в одном ZIP-архиве. Ручной резервный экспорт по запросу
- * администратора — та же функция, что использует автоматический
- * бэкап в R2 (см. /admin/backups).
+ * Полная выгрузка всех данных одним ZIP-архивом. Это GET-запрос,
+ * не изменяющий данные, поэтому CSRF-проверка ему не нужна —
+ * максимум, что может сделать сторонняя страница, заставив браузер
+ * перейти по этой ссылке — инициировать скачивание файла себе же.
  */
 export async function handleAdminExportAll(
   request: Request,

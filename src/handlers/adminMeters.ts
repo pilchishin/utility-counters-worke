@@ -10,6 +10,10 @@ import {
   updateMeterDetails,
 } from "../db/meters";
 import { logEvent } from "../db/eventLog";
+import {
+  verifyCsrfToken,
+  csrfRejectedResponse,
+} from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -36,6 +40,11 @@ export async function handleAdminMeterAdd(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const backPath = `/admin/apartments/${apartmentId}`;
 
   const apartment = await findApartmentById(env.DB, apartmentId);
@@ -46,7 +55,6 @@ export async function handleAdminMeterAdd(
     });
   }
 
-  const form = await request.formData();
   const resourceTypeId = Number(form.get("resource_type_id"));
   const rawZone = String(form.get("tariff_zone") ?? "").trim();
   const tariffZone = rawZone === "day" || rawZone === "night" ? rawZone : null;
@@ -105,6 +113,11 @@ export async function handleAdminMeterDecommission(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const meter = await findAdminMeterById(env.DB, meterId);
   if (!meter) {
     return redirectWithMessage("/admin/apartments", {
@@ -150,6 +163,11 @@ export async function handleAdminMeterReplace(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const oldMeter = await findAdminMeterById(env.DB, oldMeterId);
   if (!oldMeter) {
     return redirectWithMessage("/admin/apartments", {
@@ -167,7 +185,6 @@ export async function handleAdminMeterReplace(
     });
   }
 
-  const form = await request.formData();
   const serialNumberRaw = String(form.get("serial_number") ?? "").trim();
   const serialNumber = serialNumberRaw.length > 0 ? serialNumberRaw : null;
   const initialReading = Number(form.get("initial_reading"));
@@ -188,7 +205,7 @@ export async function handleAdminMeterReplace(
 
   const newMeterId = await insertMeter(env.DB, {
     apartmentId: oldMeter.apartment_id,
-    resourceTypeId: oldMeter.resource_code === "" ? 0 : (await resourceTypeIdByCode(env.DB, oldMeter.resource_code)),
+    resourceTypeId: await resourceTypeIdByCode(env.DB, oldMeter.resource_code),
     tariffZone: oldMeter.tariff_zone,
     serialNumber,
     initialReading,
@@ -233,6 +250,11 @@ export async function handleAdminMeterEdit(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const meter = await findAdminMeterById(env.DB, meterId);
   if (!meter) {
     return redirectWithMessage("/admin/apartments", {
@@ -243,7 +265,6 @@ export async function handleAdminMeterEdit(
 
   const backPath = `/admin/apartments/${meter.apartment_id}`;
 
-  const form = await request.formData();
   const serialNumberRaw = String(form.get("serial_number") ?? "").trim();
   const serialNumber = serialNumberRaw.length > 0 ? serialNumberRaw : null;
   const installedAt = String(form.get("installed_at") ?? "");

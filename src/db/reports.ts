@@ -162,3 +162,59 @@ export async function listAllReadingsForExport(
 
   return result.results;
 }
+
+export interface TelegramUserExportRow {
+  id: number;
+  tg_id: number;
+  apartment_number: string | null;
+  role: string;
+  display_name: string | null;
+  registered_at: string;
+  is_blocked: number;
+  is_deleted: number;
+}
+
+/**
+ * Полная выгрузка пользователей Telegram — без этой таблицы бэкап
+ * бесполезен для восстановления: именно здесь хранится привязка
+ * tg_id к квартире, роль и статус блокировки. Включает мягко
+ * удалённых (is_deleted=1) — история привязок важна для разбора.
+ */
+export async function listTelegramUsersForExport(
+  db: D1Database
+): Promise<TelegramUserExportRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT u.id AS id, u.tg_id AS tg_id, a.number AS apartment_number,
+              u.role AS role, u.display_name AS display_name,
+              u.registered_at AS registered_at, u.is_blocked AS is_blocked,
+              u.is_deleted AS is_deleted
+       FROM telegram_users u
+       LEFT JOIN apartments a ON a.id = u.apartment_id
+       ORDER BY u.id`
+    )
+    .all<TelegramUserExportRow>();
+
+  return result.results;
+}
+
+export interface SystemSettingExportRow {
+  key: string;
+  value: string;
+  updated_at: string;
+}
+
+/**
+ * Полная выгрузка настроек системы — без них восстановленная система
+ * откатится к значениям по умолчанию из кода (пороги проверки расхода,
+ * расписание напоминаний, часовой пояс и т.д.).
+ */
+export async function listSystemSettingsForExport(
+  db: D1Database
+): Promise<SystemSettingExportRow[]> {
+  const result = await db
+    .prepare("SELECT key, value, updated_at FROM system_settings ORDER BY key")
+    .all<SystemSettingExportRow>();
+
+  return result.results;
+}

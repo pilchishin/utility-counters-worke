@@ -9,6 +9,12 @@ import {
 import { performBackup } from "../services/backup";
 import { getSettingText } from "../db/settings";
 import { getLocalDateTime } from "../utils/localTime";
+import {
+  computeCsrfToken,
+  csrfField,
+  verifyCsrfToken,
+  csrfRejectedResponse,
+} from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -44,6 +50,7 @@ export async function handleAdminBackupsPage(
   if (denied) return denied;
 
   const url = new URL(request.url);
+  const csrfToken = await computeCsrfToken(env);
 
   const listing = await env.et14a_bucket.list({ prefix: BACKUP_PREFIX, limit: 100 });
   // Новые сверху — ключи вида backups/ГГГГ-ММ-ДД.zip сортируются
@@ -64,6 +71,7 @@ export async function handleAdminBackupsPage(
             <td>
               <form class="inline" method="post" action="/admin/backups/delete"
                     onsubmit="return confirm('Удалить бэкап ${escapeHtml(object.key.slice(BACKUP_PREFIX.length))}? Это необратимо.');">
+                ${csrfField(csrfToken)}
                 <input type="hidden" name="key" value="${escapeHtml(object.key)}">
                 <button type="submit">Удалить</button>
               </form>
@@ -82,6 +90,7 @@ export async function handleAdminBackupsPage(
 
     <div class="toolbar">
       <form method="post" action="/admin/backups/run">
+        ${csrfField(csrfToken)}
         <button type="submit">Создать бэкап сейчас</button>
       </form>
     </div>
@@ -106,7 +115,10 @@ export async function handleAdminBackupsPage(
   });
 }
 
-/** Скачивание конкретного бэкапа из R2. */
+/**
+ * Скачивание конкретного бэкапа из R2. Это GET-запрос, не изменяющий
+ * данные, поэтому CSRF-проверка не нужна.
+ */
 export async function handleAdminBackupDownload(
   request: Request,
   env: Env
@@ -146,6 +158,10 @@ export async function handleAdminBackupDelete(
   if (denied) return denied;
 
   const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const key = String(form.get("key") ?? "");
 
   if (!BACKUP_KEY_PATTERN.test(key)) {
@@ -170,6 +186,11 @@ export async function handleAdminBackupRun(
 ): Promise<Response> {
   const denied = guard(request, env);
   if (denied) return denied;
+
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
 
   const timeZone = await getSettingText(env.DB, "timezone", "Europe/Kyiv");
   const local = getLocalDateTime(new Date(), timeZone);

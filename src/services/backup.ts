@@ -5,11 +5,15 @@ import {
   listApartmentsForExport,
   listMetersForExport,
   listAllReadingsForExport,
+  listTelegramUsersForExport,
+  listSystemSettingsForExport,
 } from "../db/reports";
 import type {
   ApartmentExportRow,
   MeterExportRow,
   ReadingFullExportRow,
+  TelegramUserExportRow,
+  SystemSettingExportRow,
 } from "../db/reports";
 import { formatValue } from "./format";
 import { getSettingNumber, getSettingText, setSettingText } from "../db/settings";
@@ -17,10 +21,15 @@ import { logEvent } from "../db/eventLog";
 import { getLocalDateTime } from "../utils/localTime";
 
 /**
- * Полный резервный архив: три CSV-файла (квартиры, счётчики, показания)
- * в одном ZIP. Используется и ручным экспортом администратора
- * (/admin/apartments/export-all), и автоматическим бэкапом в R2 —
- * один и тот же код, без дублирования.
+ * Полный резервный архив: пять CSV-файлов (квартиры, счётчики, показания,
+ * жильцы, настройки) в одном ZIP. Используется и ручным экспортом
+ * администратора (/admin/apartments/export-all), и автоматическим
+ * бэкапом в R2 — один и тот же код, без дублирования.
+ *
+ * telegram_users и system_settings включены начиная с этой версии:
+ * без них восстановление после потери базы не имело бы смысла —
+ * все жильцы потеряли бы привязку к квартирам, а все настроенные
+ * пороги и расписания откатились бы к значениям по умолчанию в коде.
  */
 
 function apartmentRowToCsv(row: ApartmentExportRow): unknown[] {
@@ -65,11 +74,30 @@ function readingRowToCsv(row: ReadingFullExportRow): unknown[] {
   ];
 }
 
+function telegramUserRowToCsv(row: TelegramUserExportRow): unknown[] {
+  return [
+    row.id,
+    row.tg_id,
+    row.apartment_number ?? "",
+    row.role,
+    row.display_name ?? "",
+    row.registered_at,
+    row.is_blocked ? "да" : "нет",
+    row.is_deleted ? "да" : "нет",
+  ];
+}
+
+function systemSettingRowToCsv(row: SystemSettingExportRow): unknown[] {
+  return [row.key, row.value, row.updated_at];
+}
+
 /** Собирает полный архив данных в виде байтов ZIP-файла. */
 export async function buildFullBackupZip(db: D1Database): Promise<Uint8Array> {
   const apartments = await listApartmentsForExport(db);
   const meters = await listMetersForExport(db);
   const readings = await listAllReadingsForExport(db);
+  const telegramUsers = await listTelegramUsersForExport(db);
+  const systemSettings = await listSystemSettingsForExport(db);
 
   const apartmentsCsv = buildCsv(
     ["ID", "Номер", "Статус", "Код доступа активен", "Создана"],
@@ -94,10 +122,25 @@ export async function buildFullBackupZip(db: D1Database): Promise<Uint8Array> {
     readings.map(readingRowToCsv)
   );
 
+  const telegramUsersCsv = buildCsv(
+    [
+      "ID", "Telegram ID", "Квартира", "Роль", "Отображаемое имя",
+      "Зарегистрирован", "Заблокирован", "Удалён",
+    ],
+    telegramUsers.map(telegramUserRowToCsv)
+  );
+
+  const systemSettingsCsv = buildCsv(
+    ["Ключ", "Значение", "Обновлено"],
+    systemSettings.map(systemSettingRowToCsv)
+  );
+
   return buildStoredZip([
     { name: "apartments.csv", content: apartmentsCsv },
     { name: "meters.csv", content: metersCsv },
     { name: "readings.csv", content: readingsCsv },
+    { name: "telegram_users.csv", content: telegramUsersCsv },
+    { name: "system_settings.csv", content: systemSettingsCsv },
   ]);
 }
 

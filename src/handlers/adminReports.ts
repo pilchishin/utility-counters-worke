@@ -23,6 +23,7 @@ import {
   formatValue,
   meterTitle,
 } from "../services/format";
+import { computeCsrfToken, csrfField } from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -60,6 +61,7 @@ export async function handleAdminReportsPage(
 
   const url = new URL(request.url);
   const periods = await listAllPeriods(env.DB);
+  const csrfToken = await computeCsrfToken(env);
 
   const requestedId = Number(url.searchParams.get("period"));
   const selectedPeriod =
@@ -73,7 +75,7 @@ export async function handleAdminReportsPage(
   } else {
     const apartments = await listApartmentsOverview(env.DB, selectedPeriod.id);
     const suspicious = await listSuspiciousReadings(env.DB, selectedPeriod.id);
-    body = renderReportBody(periods, selectedPeriod, apartments, suspicious);
+    body = renderReportBody(periods, selectedPeriod, apartments, suspicious, csrfToken);
   }
 
   const html = renderAdminPage("Отчёты", "reports", readFlashMessage(url), body);
@@ -126,7 +128,11 @@ function renderApartmentsTable(apartments: ApartmentOverviewRow[]): string {
 }
 
 /** Строка таблицы подозрительных показаний с формами действий (как на обзоре). */
-function renderSuspiciousRow(row: SuspiciousReadingRow, returnTo: string): string {
+function renderSuspiciousRow(
+  row: SuspiciousReadingRow,
+  returnTo: string,
+  csrfToken: string
+): string {
   const meterLabel = escapeHtml(
     meterTitle(row.serial_number, row.meter_id, row.tariff_zone)
   );
@@ -141,6 +147,7 @@ function renderSuspiciousRow(row: SuspiciousReadingRow, returnTo: string): strin
     <td>${escapeHtml(flagReasonLabel(row.flag_reason))}</td>
     <td>
       <form class="inline" method="post" action="/admin/readings/confirm">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="reading_id" value="${row.reading_id}">
         <input type="hidden" name="return_to" value="${escapeHtml(returnTo)}">
         <button type="submit">Подтвердить</button>
@@ -148,6 +155,7 @@ function renderSuspiciousRow(row: SuspiciousReadingRow, returnTo: string): strin
     </td>
     <td>
       <form class="correction" method="post" action="/admin/readings/correct">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="reading_id" value="${row.reading_id}">
         <input type="hidden" name="return_to" value="${escapeHtml(returnTo)}">
         <input type="number" step="0.001" min="0" name="value" placeholder="Верное значение" required>
@@ -160,13 +168,16 @@ function renderSuspiciousRow(row: SuspiciousReadingRow, returnTo: string): strin
 
 function renderSuspiciousTable(
   rows: SuspiciousReadingRow[],
-  returnTo: string
+  returnTo: string,
+  csrfToken: string
 ): string {
   if (rows.length === 0) {
     return "<p>Подозрительных показаний за этот период нет.</p>";
   }
 
-  const body = rows.map((row) => renderSuspiciousRow(row, returnTo)).join("\n");
+  const body = rows
+    .map((row) => renderSuspiciousRow(row, returnTo, csrfToken))
+    .join("\n");
 
   return `<table>
     <thead><tr>
@@ -178,15 +189,17 @@ function renderSuspiciousTable(
 }
 
 /** Форма управления статусом периода: закрыть вручную или открыть заново. */
-function renderPeriodControls(period: PeriodOption): string {
+function renderPeriodControls(period: PeriodOption, csrfToken: string): string {
   if (period.status === "collecting") {
     return `<form class="inline" method="post" action="/admin/periods/${period.id}/close"
                   onsubmit="return confirm('Закрыть период раньше срока? Жильцы больше не смогут подавать показания через бота.');">
+      ${csrfField(csrfToken)}
       <button type="submit">Закрыть период вручную</button>
     </form>`;
   }
 
   return `<form class="correction" method="post" action="/admin/periods/${period.id}/reopen">
+    ${csrfField(csrfToken)}
     <input type="text" name="reason" placeholder="Причина повторного открытия" required style="min-width:260px;">
     <button type="submit">Открыть период заново</button>
   </form>`;
@@ -196,7 +209,8 @@ function renderReportBody(
   periods: PeriodOption[],
   period: PeriodOption,
   apartments: ApartmentOverviewRow[],
-  suspicious: SuspiciousReadingRow[]
+  suspicious: SuspiciousReadingRow[],
+  csrfToken: string
 ): string {
   const total = apartments.length;
   const complete = apartments.filter(
@@ -219,14 +233,14 @@ function renderReportBody(
 
   <div class="toolbar">
     <a class="button-link" href="/admin/reports/export?period=${period.id}">⬇ Скачать CSV за этот период</a>
-    ${renderPeriodControls(period)}
+    ${renderPeriodControls(period, csrfToken)}
   </div>
 
   <h2>Квартиры</h2>
   ${renderApartmentsTable(apartments)}
 
   <h2>Подозрительные показания</h2>
-  ${renderSuspiciousTable(suspicious, returnTo)}
+  ${renderSuspiciousTable(suspicious, returnTo, csrfToken)}
   `;
 }
 

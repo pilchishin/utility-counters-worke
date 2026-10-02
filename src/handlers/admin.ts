@@ -14,6 +14,7 @@ import {
   meterTitle,
 } from "../services/format";
 import { renderAdminPage, escapeHtml, readFlashMessage } from "../services/adminLayout";
+import { computeCsrfToken, csrfField } from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -39,12 +40,13 @@ export async function handleAdminDashboard(
   const period = await getOrCreateCurrentPeriod(env.DB);
   const apartments = await listApartmentsOverview(env.DB, period.id);
   const suspicious = await listSuspiciousReadings(env.DB, period.id);
+  const csrfToken = await computeCsrfToken(env);
 
   const html = renderAdminPage(
     "Обзор",
     "dashboard",
     readFlashMessage(url),
-    renderDashboardBody(period, apartments, suspicious)
+    renderDashboardBody(period, apartments, suspicious, csrfToken)
   );
 
   return new Response(html, {
@@ -92,7 +94,7 @@ function renderApartmentsTable(apartments: ApartmentOverviewRow[]): string {
 }
 
 /** Строка таблицы подозрительных показаний с формами действий. */
-function renderSuspiciousRow(row: SuspiciousReadingRow): string {
+function renderSuspiciousRow(row: SuspiciousReadingRow, csrfToken: string): string {
   const meterLabel = escapeHtml(
     meterTitle(row.serial_number, row.meter_id, row.tariff_zone)
   );
@@ -107,12 +109,14 @@ function renderSuspiciousRow(row: SuspiciousReadingRow): string {
     <td>${escapeHtml(flagReasonLabel(row.flag_reason))}</td>
     <td>
       <form class="inline" method="post" action="/admin/readings/confirm">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="reading_id" value="${row.reading_id}">
         <button type="submit">Подтвердить</button>
       </form>
     </td>
     <td>
       <form class="correction" method="post" action="/admin/readings/correct">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="reading_id" value="${row.reading_id}">
         <input type="number" step="0.001" min="0" name="value" placeholder="Верное значение" required>
         <input type="text" name="comment" placeholder="Причина исправления" required>
@@ -122,12 +126,15 @@ function renderSuspiciousRow(row: SuspiciousReadingRow): string {
   </tr>`;
 }
 
-function renderSuspiciousTable(rows: SuspiciousReadingRow[]): string {
+function renderSuspiciousTable(
+  rows: SuspiciousReadingRow[],
+  csrfToken: string
+): string {
   if (rows.length === 0) {
     return "<p>Подозрительных показаний за этот период нет.</p>";
   }
 
-  const body = rows.map(renderSuspiciousRow).join("\n");
+  const body = rows.map((row) => renderSuspiciousRow(row, csrfToken)).join("\n");
 
   return `<table>
     <thead><tr>
@@ -141,7 +148,8 @@ function renderSuspiciousTable(rows: SuspiciousReadingRow[]): string {
 function renderDashboardBody(
   period: { year: number; month: number; ends_at: string; status: string },
   apartments: ApartmentOverviewRow[],
-  suspicious: SuspiciousReadingRow[]
+  suspicious: SuspiciousReadingRow[],
+  csrfToken: string
 ): string {
   const total = apartments.length;
   const complete = apartments.filter(
@@ -163,6 +171,6 @@ function renderDashboardBody(
   ${renderApartmentsTable(apartments)}
 
   <h2>Подозрительные показания</h2>
-  ${renderSuspiciousTable(suspicious)}
+  ${renderSuspiciousTable(suspicious, csrfToken)}
   `;
 }

@@ -11,6 +11,10 @@ import { findApartmentById, countActiveUsersForApartment } from "../db/apartment
 import { getSettingNumber } from "../db/settings";
 import { logEvent } from "../db/eventLog";
 import { removePendingRegistration } from "../db/pendingRegistrations";
+import {
+  verifyCsrfToken,
+  csrfRejectedResponse,
+} from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -34,6 +38,11 @@ export async function handleAdminUserAdd(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const backPath = `/admin/apartments/${apartmentId}`;
 
   const apartment = await findApartmentById(env.DB, apartmentId);
@@ -44,7 +53,6 @@ export async function handleAdminUserAdd(
     });
   }
 
-  const form = await request.formData();
   const tgId = Number(form.get("tg_id"));
 
   if (!Number.isInteger(tgId) || tgId <= 0) {
@@ -97,6 +105,11 @@ export async function handleAdminUserUnbind(
   const denied = guard(request, env);
   if (denied) return denied;
 
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
+
   const user = await findUserById(env.DB, userId);
   if (!user || user.apartment_id === null) {
     return redirectWithMessage("/admin/apartments", {
@@ -131,6 +144,11 @@ export async function handleAdminUserSetBlocked(
 ): Promise<Response> {
   const denied = guard(request, env);
   if (denied) return denied;
+
+  const form = await request.formData();
+  if (!(await verifyCsrfToken(env, form.get("csrf_token")))) {
+    return csrfRejectedResponse();
+  }
 
   const user = await findUserById(env.DB, userId);
   if (!user || user.apartment_id === null) {

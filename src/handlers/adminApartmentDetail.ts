@@ -15,6 +15,7 @@ import { listActiveResourceTypes } from "../db/resourceTypes";
 import { listPendingRegistrations } from "../db/pendingRegistrations";
 import type { PendingRegistrationRow } from "../db/pendingRegistrations";
 import { meterTitle, formatValue, formatDateRu } from "../services/format";
+import { computeCsrfToken, csrfField } from "../services/csrf";
 
 const NOT_CONFIGURED_MESSAGE =
   "Административная панель ещё не настроена: не задан пароль администратора.";
@@ -45,12 +46,21 @@ export async function handleAdminApartmentDetail(
   const pending = await listPendingRegistrations(env.DB, PENDING_LIST_LIMIT);
   const meters = await listAllMetersForApartment(env.DB, apartmentId);
   const resourceTypes = await listActiveResourceTypes(env.DB);
+  const csrfToken = await computeCsrfToken(env);
 
   const html = renderAdminPage(
     `Квартира №${apartment.number}`,
     "apartments",
     readFlashMessage(url),
-    renderBody(apartmentId, apartment.number, users, pending, meters, resourceTypes)
+    renderBody(
+      apartmentId,
+      apartment.number,
+      users,
+      pending,
+      meters,
+      resourceTypes,
+      csrfToken
+    )
   );
 
   return new Response(html, {
@@ -59,7 +69,7 @@ export async function handleAdminApartmentDetail(
   });
 }
 
-function renderUserRow(user: TelegramUserRow): string {
+function renderUserRow(user: TelegramUserRow, csrfToken: string): string {
   const statusText = user.is_blocked ? "заблокирован" : "активен";
   const statusClass = user.is_blocked ? "status-inactive" : "status-ok";
   const blockAction = user.is_blocked ? "unblock" : "block";
@@ -72,12 +82,14 @@ function renderUserRow(user: TelegramUserRow): string {
     <td class="${statusClass}">${statusText}</td>
     <td>
       <form class="inline" method="post" action="/admin/users/${user.id}/${blockAction}">
+        ${csrfField(csrfToken)}
         <button type="submit">${blockLabel}</button>
       </form>
     </td>
     <td>
       <form class="inline" method="post" action="/admin/users/${user.id}/unbind"
             onsubmit="return confirm('Отвязать этот аккаунт от квартиры? История его показаний сохранится.');">
+        ${csrfField(csrfToken)}
         <button type="submit">Отвязать</button>
       </form>
     </td>
@@ -87,7 +99,8 @@ function renderUserRow(user: TelegramUserRow): string {
 /** Строка списка "ожидают привязки" с кнопкой быстрой привязки к этой квартире. */
 function renderPendingRow(
   apartmentId: number,
-  row: PendingRegistrationRow
+  row: PendingRegistrationRow,
+  csrfToken: string
 ): string {
   return `<tr>
     <td>${row.tg_id}</td>
@@ -95,6 +108,7 @@ function renderPendingRow(
     <td>${escapeHtml(row.last_seen)}</td>
     <td>
       <form class="inline" method="post" action="/admin/apartments/${apartmentId}/users/add">
+        ${csrfField(csrfToken)}
         <input type="hidden" name="tg_id" value="${row.tg_id}">
         <button type="submit">Привязать к этой квартире</button>
       </form>
@@ -110,14 +124,15 @@ function renderPendingRow(
  */
 function renderPendingSection(
   apartmentId: number,
-  pending: PendingRegistrationRow[]
+  pending: PendingRegistrationRow[],
+  csrfToken: string
 ): string {
   if (pending.length === 0) {
     return "";
   }
 
   const rows = pending
-    .map((row) => renderPendingRow(apartmentId, row))
+    .map((row) => renderPendingRow(apartmentId, row, csrfToken))
     .join("\n");
 
   return `
@@ -131,10 +146,11 @@ function renderPendingSection(
 function renderUsersSection(
   apartmentId: number,
   users: TelegramUserRow[],
-  pending: PendingRegistrationRow[]
+  pending: PendingRegistrationRow[],
+  csrfToken: string
 ): string {
   const rows = users.length
-    ? users.map(renderUserRow).join("\n")
+    ? users.map((user) => renderUserRow(user, csrfToken)).join("\n")
     : `<tr><td colspan="5">К квартире не привязано ни одного аккаунта.</td></tr>`;
 
   return `
@@ -144,10 +160,11 @@ function renderUsersSection(
     <tbody>${rows}</tbody>
   </table>
 
-  ${renderPendingSection(apartmentId, pending)}
+  ${renderPendingSection(apartmentId, pending, csrfToken)}
 
   <h3 style="margin-top:16px;font-size:14px;">Привязать вручную по Telegram ID</h3>
   <form class="add-form" method="post" action="/admin/apartments/${apartmentId}/users/add">
+    ${csrfField(csrfToken)}
     <label>Telegram ID жильца (если его нет в списке выше — узнайте у него, например, через @userinfobot)
       <input type="number" name="tg_id" required min="1" step="1">
     </label>
@@ -156,7 +173,7 @@ function renderUsersSection(
   `;
 }
 
-function renderMeterRow(meter: AdminMeterRow): string {
+function renderMeterRow(meter: AdminMeterRow, csrfToken: string): string {
   const title = escapeHtml(
     meterTitle(meter.serial_number, meter.id, meter.tariff_zone)
   );
@@ -169,6 +186,7 @@ function renderMeterRow(meter: AdminMeterRow): string {
     ? `
       <td>
         <form class="correction" method="post" action="/admin/meters/${meter.id}/replace">
+          ${csrfField(csrfToken)}
           <input type="text" name="serial_number" placeholder="Новый серийный №" value="${escapeHtml(meter.serial_number ?? "")}">
           <input type="number" step="0.001" min="0" name="initial_reading" placeholder="Начальное показание" required>
           <input type="date" name="installed_at" value="${todayIsoDate()}" required>
@@ -178,6 +196,7 @@ function renderMeterRow(meter: AdminMeterRow): string {
       <td>
         <form class="inline" method="post" action="/admin/meters/${meter.id}/decommission"
               onsubmit="return confirm('Снять счётчик ${title} с учёта без замены?');">
+          ${csrfField(csrfToken)}
           <button type="submit">Снять с учёта</button>
         </form>
       </td>`
@@ -191,7 +210,7 @@ function renderMeterRow(meter: AdminMeterRow): string {
     ${actions}
   </tr>`;
 
-  return mainRow + "\n" + renderMeterEditRow(meter);
+  return mainRow + "\n" + renderMeterEditRow(meter, csrfToken);
 }
 
 /**
@@ -200,7 +219,7 @@ function renderMeterRow(meter: AdminMeterRow): string {
  * начального показания — без создания новой записи, в отличие
  * от "Заменить".
  */
-function renderMeterEditRow(meter: AdminMeterRow): string {
+function renderMeterEditRow(meter: AdminMeterRow, csrfToken: string): string {
   const canEditInitial = meter.readings_count === 0;
 
   const initialField = canEditInitial
@@ -213,6 +232,7 @@ function renderMeterEditRow(meter: AdminMeterRow): string {
   return `<tr>
     <td colspan="6" style="background:#f7f7f7;">
       <form class="correction" method="post" action="/admin/meters/${meter.id}/edit">
+        ${csrfField(csrfToken)}
         <span style="font-size:12px;color:#666;">Исправить данные:</span>
         <input type="text" name="serial_number" placeholder="Серийный номер"
                value="${escapeHtml(meter.serial_number ?? "")}" style="width:140px;">
@@ -235,10 +255,11 @@ function renderResourceOptions(
 function renderMetersSection(
   apartmentId: number,
   meters: AdminMeterRow[],
-  resourceTypes: { id: number; code: string; name: string; unit: string }[]
+  resourceTypes: { id: number; code: string; name: string; unit: string }[],
+  csrfToken: string
 ): string {
   const rows = meters.length
-    ? meters.map(renderMeterRow).join("\n")
+    ? meters.map((meter) => renderMeterRow(meter, csrfToken)).join("\n")
     : `<tr><td colspan="6">Для квартиры не заведено ни одного счётчика.</td></tr>`;
 
   return `
@@ -253,6 +274,7 @@ function renderMetersSection(
 
   <h2>Добавить счётчик</h2>
   <form class="add-form" method="post" action="/admin/apartments/${apartmentId}/meters/add">
+    ${csrfField(csrfToken)}
     <label>Ресурс
       <select name="resource_type_id" required>
         ${renderResourceOptions(resourceTypes)}
@@ -285,12 +307,13 @@ function renderBody(
   users: TelegramUserRow[],
   pending: PendingRegistrationRow[],
   meters: AdminMeterRow[],
-  resourceTypes: { id: number; code: string; name: string; unit: string }[]
+  resourceTypes: { id: number; code: string; name: string; unit: string }[],
+  csrfToken: string
 ): string {
   return `
   <a class="back-link" href="/admin/apartments">← Все квартиры</a>
   <h2 style="margin-top:8px;">Квартира №${escapeHtml(apartmentNumber)}</h2>
-  ${renderUsersSection(apartmentId, users, pending)}
-  ${renderMetersSection(apartmentId, meters, resourceTypes)}
+  ${renderUsersSection(apartmentId, users, pending, csrfToken)}
+  ${renderMetersSection(apartmentId, meters, resourceTypes, csrfToken)}
   `;
 }
