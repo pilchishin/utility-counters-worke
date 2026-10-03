@@ -3,6 +3,7 @@ import type { TelegramUpdate } from "../telegram";
 import type { Env } from "../index";
 import { handleTextMessage } from "./message";
 import { handleCallbackQuery } from "./callback";
+import { timingSafeStringEqual } from "../services/timingSafe";
 
 /**
  * Заголовок, в котором Telegram присылает секретный токен webhook'а.
@@ -19,7 +20,13 @@ export async function handleTelegramWebhook(
   env: Env
 ): Promise<Response> {
   const receivedSecret = request.headers.get(SECRET_TOKEN_HEADER);
-  if (receivedSecret !== env.WEBHOOK_SECRET) {
+
+  // Сравнение за постоянное время — тот же подход, что и для пароля
+  // администратора и токена ручного запуска планировщика.
+  if (
+    receivedSecret === null ||
+    !timingSafeStringEqual(receivedSecret, env.WEBHOOK_SECRET)
+  ) {
     return new Response("Forbidden", { status: 403 });
   }
 

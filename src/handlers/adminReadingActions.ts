@@ -68,6 +68,10 @@ export async function handleAdminConfirmReading(
     });
   }
 
+  // Эта выборка — только для текста события и ранней проверки для
+  // удобства пользователя (быстрый ответ "уже обработано" без лишней
+  // записи UPDATE). Окончательное решение принимает условие WHERE
+  // в самом adminConfirmReading — оно же защищает от гонки.
   const reading = await findReadingById(env.DB, readingId);
   if (!reading || reading.status !== "suspicious") {
     return redirectWithMessage(backPath, {
@@ -76,7 +80,17 @@ export async function handleAdminConfirmReading(
     });
   }
 
-  await adminConfirmReading(env.DB, readingId);
+  const changed = await adminConfirmReading(env.DB, readingId);
+
+  if (!changed) {
+    // Кто-то (или этот же запрос, отправленный повторно) успел
+    // обработать показание в промежутке между проверкой выше и этим
+    // вызовом. Не пишем событие и не показываем ложный успех.
+    return redirectWithMessage(backPath, {
+      kind: "error",
+      text: "Показание уже обработано — возможно, кем-то другим буквально сейчас.",
+    });
+  }
 
   await logEvent(env.DB, {
     entityType: "reading",
@@ -150,6 +164,10 @@ export async function handleAdminCorrectReading(
     });
   }
 
+  // Эта выборка — для расчёта расхода и ранней проверки для удобства
+  // (быстрый ответ "уже обработано"). Окончательное решение — за
+  // условием WHERE в самом adminCorrectReading, оно же защищает
+  // от гонки между двумя одновременными исправлениями.
   const reading = await findReadingById(env.DB, readingId);
   if (!reading || reading.status !== "suspicious") {
     return redirectWithMessage(backPath, {
@@ -175,11 +193,21 @@ export async function handleAdminCorrectReading(
   const baseValue = previous !== null ? previous : meter.initial_reading;
   const consumption = roundTo3(parsed.value - baseValue);
 
-  await adminCorrectReading(env.DB, readingId, {
+  const changed = await adminCorrectReading(env.DB, readingId, {
     value: parsed.value,
     consumption,
     comment,
   });
+
+  if (!changed) {
+    // Кто-то успел подтвердить или исправить это же показание первым
+    // в промежутке между проверкой выше и этим вызовом — не затираем
+    // его работу молча и не пишем событие о несостоявшемся изменении.
+    return redirectWithMessage(backPath, {
+      kind: "error",
+      text: "Показание уже обработано — возможно, кем-то другим буквально сейчас.",
+    });
+  }
 
   await logEvent(env.DB, {
     entityType: "reading",

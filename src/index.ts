@@ -40,6 +40,7 @@ import {
   handleAdminBackupDelete,
   handleAdminBackupRun,
 } from "./handlers/adminBackups";
+import { adminAuthGate } from "./services/adminAuth";
 import { runScheduledTasks } from "./services/scheduler";
 
 /**
@@ -97,6 +98,17 @@ export default {
     // Ручной запуск планировщика (только если задан MANUAL_RUN_TOKEN).
     if (pathname === "/internal/run-scheduled" && method === "POST") {
       return handleManualScheduledRun(request, env);
+    }
+
+    // Единый "шлюз" для всей административной панели: проверка пароля
+    // и защита от перебора по IP. Если запрос отклонён (неверный
+    // пароль или блокировка) — отвечаем сразу, не доходя до
+    // конкретного обработчика страницы/действия.
+    if (pathname.startsWith("/admin")) {
+      const gate = await adminAuthGate(request, env);
+      if (gate) {
+        return gate;
+      }
     }
 
     // Административная панель: обзор.

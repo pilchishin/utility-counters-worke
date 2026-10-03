@@ -13,6 +13,8 @@ import { runReminders, runAdminReport } from "./reminders";
 import type { ReminderRunResult, AdminReportResult } from "./reminders";
 import { runBackupIfDue } from "./backup";
 import type { BackupRunResult } from "./backup";
+import { checkWebhookHealth, checkBackupWindowHealth } from "./systemHealth";
+import type { HealthCheckResult } from "./systemHealth";
 
 /**
  * Периодические задачи (вызываются Cron Trigger раз в час).
@@ -32,6 +34,8 @@ export interface ScheduledRunSummary {
   adminReport: AdminReportResult | null;
   closedPeriods: string[];
   backup: BackupRunResult | null;
+  webhookHealth: HealthCheckResult | null;
+  backupWindowHealth: HealthCheckResult | null;
   errors: string[];
 }
 
@@ -129,6 +133,8 @@ export async function runScheduledTasks(
     adminReport: null,
     closedPeriods: [],
     backup: null,
+    webhookHealth: null,
+    backupWindowHealth: null,
     errors,
   };
 
@@ -167,6 +173,16 @@ export async function runScheduledTasks(
   // Шаг 5. Еженедельный автоматический бэкап в R2 (если наступило время).
   summary.backup = await runStep("бэкап", errors, () =>
     runBackupIfDue(env, now)
+  );
+
+  // Шаг 6. Проверка работоспособности webhook'а (раз в сутки).
+  summary.webhookHealth = await runStep("проверка webhook", errors, () =>
+    checkWebhookHealth(env, local)
+  );
+
+  // Шаг 7. Проверка, не пропущено ли окно еженедельного бэкапа.
+  summary.backupWindowHealth = await runStep("проверка окна бэкапа", errors, () =>
+    checkBackupWindowHealth(env, local)
   );
 
   return summary;

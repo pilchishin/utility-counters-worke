@@ -218,35 +218,54 @@ export interface AdminCorrectionParams {
  * (correction_comment) и всегда переводит показание в статус
  * 'corrected' — как показание, изменённое администратором, а не
  * жильцом.
+ *
+ * Условие "WHERE status = 'suspicious'" стоит прямо в UPDATE, а не
+ * только в проверке до него в обработчике — это закрывает гонку:
+ * если два почти одновременных запроса пытаются исправить одно и то
+ * же показание (или одно из них уже подтверждено/исправлено между
+ * моментом чтения и записи), применится только первый, а второй
+ * получит changed=false и не затрёт чужое исправление молча.
+ *
+ * Возвращает true, если строка была изменена именно этим вызовом.
  */
 export async function adminCorrectReading(
   db: D1Database,
   readingId: number,
   params: AdminCorrectionParams
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .prepare(
       `UPDATE readings
        SET value = ?, consumption = ?, status = 'corrected', flag_reason = NULL,
            correction_comment = ?, corrected_by_user_id = NULL
-       WHERE id = ?`
+       WHERE id = ? AND status = 'suspicious'`
     )
     .bind(params.value, params.consumption, params.comment, readingId)
     .run();
+
+  return result.meta.changes > 0;
 }
 
 /**
  * Подтверждение администратором: значение верное, несмотря на пометку.
- * Само значение не меняется, статус переводится в 'ok'.
+ * Само значение не меняется, статус переводится в 'ok', причина
+ * пометки (flag_reason) очищается — иначе в базе осталась бы
+ * устаревшая причина у уже подтверждённого показания.
+ *
+ * Возвращает true, если строка была изменена именно этим вызовом
+ * (false — показание уже не было 'suspicious' на момент выполнения,
+ * например, кто-то другой успел обработать его раньше).
  */
 export async function adminConfirmReading(
   db: D1Database,
   readingId: number
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .prepare(
-      "UPDATE readings SET status = 'ok' WHERE id = ? AND status = 'suspicious'"
+      "UPDATE readings SET status = 'ok', flag_reason = NULL WHERE id = ? AND status = 'suspicious'"
     )
     .bind(readingId)
     .run();
+
+  return result.meta.changes > 0;
 }
